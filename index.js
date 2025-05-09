@@ -1,6 +1,6 @@
 import express from 'express';
 import { initializeApp } from 'firebase/app';
-import { getFirestore, collection, addDoc, getDocs, query, where } from 'firebase/firestore';
+import { getFirestore, collection, addDoc, getDocs, query, where, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
 
 // Your web app's Firebase configuration
@@ -28,9 +28,18 @@ try {
 }
 
 const app = express();
-const port = 8080;
+const port = process.env.PORT || 8080;
 
 app.use(express.json());
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  next();
+});
 
 // Test endpoint
 app.get('/', (req, res) => {
@@ -128,6 +137,155 @@ app.post('/api/auth/login', async (req, res) => {
     });
   } catch (error) {
     console.error('Error in login:', error);
+    if (error.code === 'auth/invalid-credential') {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Product Management Endpoints
+
+// Get all products
+app.get('/api/products', async (req, res) => {
+  try {
+    const productsRef = collection(db, 'products');
+    const querySnapshot = await getDocs(productsRef);
+    const products = querySnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+    res.json(products);
+  } catch (error) {
+    console.error('Error fetching products:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create new product
+app.post('/api/products', async (req, res) => {
+  try {
+    const { name, sku, category, tags, stock, minStock, price, supplier } = req.body;
+
+    // Validate required fields
+    if (!name || !sku || !category || !stock || !minStock || !price || !supplier) {
+      return res.status(400).json({ error: 'All fields are required' });
+    }
+
+    // Convert tags string to array if it's a string
+    const tagsArray = typeof tags === 'string' ? tags.split(',').map(tag => tag.trim()) : tags;
+
+    const productData = {
+      name,
+      sku,
+      category,
+      tags: tagsArray,
+      stock: Number(stock),
+      minStock: Number(minStock),
+      price: Number(price),
+      supplier,
+      createdAt: new Date()
+    };
+
+    const docRef = await addDoc(collection(db, 'products'), productData);
+    
+    res.status(201).json({
+      success: true,
+      product: {
+        id: docRef.id,
+        ...productData
+      }
+    });
+  } catch (error) {
+    console.error('Error creating product:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update product
+app.put('/api/products/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, sku, category, tags, stock, minStock, price, supplier } = req.body;
+
+    // Validate required fields
+    if (!name || !sku || !category || !stock || !minStock || !price || !supplier) {
+      return res.status(400).json({ error: 'All fields are required' });
+    }
+
+    // Convert tags string to array if it's a string
+    const tagsArray = typeof tags === 'string' ? tags.split(',').map(tag => tag.trim()) : tags;
+
+    const productData = {
+      name,
+      sku,
+      category,
+      tags: tagsArray,
+      stock: Number(stock),
+      minStock: Number(minStock),
+      price: Number(price),
+      supplier,
+      updatedAt: new Date()
+    };
+
+    const productRef = doc(db, 'products', id);
+    await updateDoc(productRef, productData);
+
+    res.json({
+      success: true,
+      product: {
+        id,
+        ...productData
+      }
+    });
+  } catch (error) {
+    console.error('Error updating product:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete product
+app.delete('/api/products/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const productRef = doc(db, 'products', id);
+    await deleteDoc(productRef);
+    
+    res.json({
+      success: true,
+      message: 'Product deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting product:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Search products
+app.get('/api/products/search', async (req, res) => {
+  try {
+    const { query } = req.query;
+    
+    if (!query) {
+      return res.status(400).json({ error: 'Search query is required' });
+    }
+
+    const productsRef = collection(db, 'products');
+    const q = query(
+      productsRef,
+      where('name', '>=', query.toLowerCase()),
+      where('name', '<=', query.toLowerCase() + '\uf8ff')
+    );
+
+    const querySnapshot = await getDocs(q);
+    const products = querySnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    res.json(products);
+  } catch (error) {
+    console.error('Error searching products:', error);
     res.status(500).json({ error: error.message });
   }
 });
