@@ -1,6 +1,6 @@
 import express from 'express';
 import { initializeApp } from 'firebase/app';
-import { getFirestore, collection, addDoc, getDocs, query, where, doc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { getFirestore, collection, addDoc, getDocs, query, where, doc, updateDoc, deleteDoc, getDoc } from 'firebase/firestore';
 import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
 
 // Your web app's Firebase configuration
@@ -136,6 +136,14 @@ app.put('/api/products/:id', async (req, res) => {
     // Convert tags string to array if it's a string
     const tagsArray = typeof tags === 'string' ? tags.split(',').map(tag => tag.trim()) : tags;
 
+    const productRef = doc(db, 'products', id);
+    
+    // First check if the product exists
+    const productDoc = await getDoc(productRef);
+    if (!productDoc.exists()) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+
     const productData = {
       name,
       sku,
@@ -148,7 +156,6 @@ app.put('/api/products/:id', async (req, res) => {
       updatedAt: new Date()
     };
 
-    const productRef = doc(db, 'products', id);
     await updateDoc(productRef, productData);
 
     res.json({
@@ -303,6 +310,140 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Stock Management Endpoints
+
+// Get all stock logs
+app.get('/api/stock-logs', async (req, res) => {
+  try {
+    if (!db) {
+      throw new Error('Database not initialized');
+    }
+
+    const stockLogsRef = collection(db, 'stockLogs');
+    const querySnapshot = await getDocs(stockLogsRef);
+    
+    if (querySnapshot.empty) {
+      return res.json([]);
+    }
+
+    const stockLogs = querySnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+    
+    res.json(stockLogs);
+  } catch (error) {
+    console.error('Error fetching stock logs:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Create new stock log
+app.post('/api/stock-logs', async (req, res) => {
+  try {
+    if (!db) {
+      throw new Error('Database not initialized');
+    }
+
+    const { productId, productName, type, quantity, notes } = req.body;
+
+    // Validate required fields
+    if (!productId || !productName || !type || !quantity) {
+      return res.status(400).json({ error: 'All fields are required' });
+    }
+
+    // Get the current user from auth (you'll need to implement proper auth middleware)
+    const currentUser = 'Current User'; // This should come from your auth system
+
+    const stockLogData = {
+      productId,
+      productName,
+      type,
+      quantity: Number(quantity),
+      date: new Date(),
+      user: currentUser,
+      notes: notes || '',
+    };
+
+    // Add the stock log
+    const logRef = await addDoc(collection(db, 'stockLogs'), stockLogData);
+
+    // Update the product stock
+    const productRef = doc(db, 'products', productId);
+    const productDoc = await getDoc(productRef);
+    
+    if (!productDoc.exists()) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+
+    const productData = productDoc.data();
+    const newStock = type === 'in' 
+      ? productData.stock + Number(quantity)
+      : productData.stock - Number(quantity);
+
+    await updateDoc(productRef, {
+      stock: newStock,
+      updatedAt: new Date()
+    });
+
+    res.status(201).json({
+      success: true,
+      stockLog: {
+        id: logRef.id,
+        ...stockLogData
+      }
+    });
+  } catch (error) {
+    console.error('Error creating stock log:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Search stock logs
+app.get('/api/stock-logs/search', async (req, res) => {
+  try {
+    if (!db) {
+      throw new Error('Database not initialized');
+    }
+
+    const { type, date } = req.query;
+    
+    let stockLogsRef = collection(db, 'stockLogs');
+    let constraints = [];
+
+    if (type && type !== 'all') {
+      constraints.push(where('type', '==', type));
+    }
+
+    if (date) {
+      const startDate = new Date(date);
+      startDate.setHours(0, 0, 0, 0);
+      const endDate = new Date(date);
+      endDate.setHours(23, 59, 59, 999);
+      
+      constraints.push(where('date', '>=', startDate));
+      constraints.push(where('date', '<=', endDate));
+    }
+
+    const q = query(stockLogsRef, ...constraints);
+    const querySnapshot = await getDocs(q);
+    
+    if (querySnapshot.empty) {
+      return res.json([]);
+    }
+
+    const stockLogs = querySnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    res.json(stockLogs);
+  } catch (error) {
+    console.error('Error searching stock logs:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
