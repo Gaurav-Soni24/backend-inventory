@@ -358,12 +358,18 @@ app.post('/api/stock-logs', async (req, res) => {
     // Get the current user from auth (you'll need to implement proper auth middleware)
     const currentUser = 'Current User'; // This should come from your auth system
 
+    // Get current date and time
+    const now = new Date();
+    const date = now.toISOString().split('T')[0];
+    const time = now.toTimeString().split(' ')[0];
+
     const stockLogData = {
       productId,
       productName,
       type,
       quantity: Number(quantity),
-      date: new Date(),
+      date,
+      time,
       user: currentUser,
       notes: notes || '',
     };
@@ -386,7 +392,7 @@ app.post('/api/stock-logs', async (req, res) => {
 
     await updateDoc(productRef, {
       stock: newStock,
-      updatedAt: new Date()
+      updatedAt: now
     });
 
     res.status(201).json({
@@ -419,13 +425,7 @@ app.get('/api/stock-logs/search', async (req, res) => {
     }
 
     if (date) {
-      const startDate = new Date(date);
-      startDate.setHours(0, 0, 0, 0);
-      const endDate = new Date(date);
-      endDate.setHours(23, 59, 59, 999);
-      
-      constraints.push(where('date', '>=', startDate));
-      constraints.push(where('date', '<=', endDate));
+      constraints.push(where('date', '==', date));
     }
 
     const q = query(stockLogsRef, ...constraints);
