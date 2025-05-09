@@ -1,46 +1,33 @@
 import express from 'express';
-import { initializeApp } from 'firebase/app';
-import { getFirestore, collection, addDoc, getDocs, query, where, doc, updateDoc, deleteDoc } from 'firebase/firestore';
-import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
+import { initializeApp, getApps, cert } from 'firebase-admin/app';
+import { getFirestore } from 'firebase-admin/firestore';
+import { getAuth } from 'firebase-admin/auth';
 
-// Your web app's Firebase configuration
-const firebaseConfig = {
-  apiKey: "AIzaSyAFyrCuGQSsaOBSIMLqM8PIZlKu9vBI3Bk",
-  authDomain: "inventory-management-sys-5223b.firebaseapp.com",
-  projectId: "inventory-management-sys-5223b",
-  storageBucket: "inventory-management-sys-5223b.firebasestorage.app",
-  messagingSenderId: "458873429371",
-  appId: "1:458873429371:web:1c66a20a8b0f30d47df1de"
-};
-
-// Initialize Firebase
-let firebaseApp;
+// Initialize Firebase Admin
 let db;
 let auth;
 
 try {
-  firebaseApp = initializeApp(firebaseConfig);
-  db = getFirestore(firebaseApp);
-  auth = getAuth(firebaseApp);
-  console.log('Firebase initialized successfully');
+  if (!getApps().length) {
+    initializeApp({
+      credential: cert({
+        projectId: "inventory-management-sys-5223b",
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n')
+      })
+    });
+  }
+  db = getFirestore();
+  auth = getAuth();
+  console.log('Firebase Admin initialized successfully');
 } catch (error) {
-  console.error('Error initializing Firebase:', error);
+  console.error('Error initializing Firebase Admin:', error);
 }
 
 const app = express();
 const port = process.env.PORT || 8080;
-const port = process.env.PORT || 8080;
 
 app.use(express.json());
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-  next();
-});
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
@@ -59,8 +46,8 @@ app.get('/', (req, res) => {
 // Test Firestore endpoint
 app.get('/test-firestore', async (req, res) => {
   try {
-    const testCollection = collection(db, 'test');
-    const docRef = await addDoc(testCollection, {
+    const testCollection = db.collection('test');
+    const docRef = await testCollection.add({
       message: 'Test successful',
       timestamp: new Date()
     });
@@ -82,7 +69,12 @@ app.post('/api/auth/signup', async (req, res) => {
     }
 
     // Create user in Firebase Auth
-    const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+    const userCredential = await auth.createUser({
+      email,
+      password,
+      displayName: name,
+      role
+    });
     const user = userCredential.user;
 
     // Store additional user data in Firestore
@@ -94,7 +86,7 @@ app.post('/api/auth/signup', async (req, res) => {
       createdAt: new Date()
     };
 
-    await addDoc(collection(db, 'users'), userData);
+    await db.collection('users').add(userData);
 
     res.status(201).json({
       success: true,
@@ -122,13 +114,13 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     // Sign in user with Firebase Auth
-    const userCredential = await signInWithEmailAndPassword(auth, email, password);
+    const userCredential = await auth.signInWithEmailAndPassword(email, password);
     const user = userCredential.user;
 
     // Get user data from Firestore
-    const usersRef = collection(db, 'users');
-    const q = query(usersRef, where('uid', '==', user.uid));
-    const querySnapshot = await getDocs(q);
+    const usersRef = db.collection('users');
+    const q = usersRef.where('uid', '==', user.uid);
+    const querySnapshot = await q.get();
     
     if (querySnapshot.empty) {
       return res.status(404).json({ error: 'User data not found' });
@@ -159,22 +151,36 @@ app.post('/api/auth/login', async (req, res) => {
 // Get all products
 app.get('/api/products', async (req, res) => {
   try {
-    const productsRef = collection(db, 'products');
-    const querySnapshot = await getDocs(productsRef);
-    const products = querySnapshot.docs.map(doc => ({
+    if (!db) {
+      throw new Error('Database not initialized');
+    }
+
+    const productsRef = db.collection('products');
+    const snapshot = await productsRef.get();
+    
+    if (snapshot.empty) {
+      return res.json([]);
+    }
+
+    const products = snapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data()
     }));
+    
     res.json(products);
   } catch (error) {
     console.error('Error fetching products:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // Create new product
 app.post('/api/products', async (req, res) => {
   try {
+    if (!db) {
+      throw new Error('Database not initialized');
+    }
+
     const { name, sku, category, tags, stock, minStock, price, supplier } = req.body;
 
     // Validate required fields
@@ -197,7 +203,7 @@ app.post('/api/products', async (req, res) => {
       createdAt: new Date()
     };
 
-    const docRef = await addDoc(collection(db, 'products'), productData);
+    const docRef = await db.collection('products').add(productData);
     
     res.status(201).json({
       success: true,
@@ -208,13 +214,17 @@ app.post('/api/products', async (req, res) => {
     });
   } catch (error) {
     console.error('Error creating product:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // Update product
 app.put('/api/products/:id', async (req, res) => {
   try {
+    if (!db) {
+      throw new Error('Database not initialized');
+    }
+
     const { id } = req.params;
     const { name, sku, category, tags, stock, minStock, price, supplier } = req.body;
 
@@ -238,8 +248,8 @@ app.put('/api/products/:id', async (req, res) => {
       updatedAt: new Date()
     };
 
-    const productRef = doc(db, 'products', id);
-    await updateDoc(productRef, productData);
+    const productRef = db.collection('products').doc(id);
+    await productRef.update(productData);
 
     res.json({
       success: true,
@@ -250,16 +260,19 @@ app.put('/api/products/:id', async (req, res) => {
     });
   } catch (error) {
     console.error('Error updating product:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // Delete product
 app.delete('/api/products/:id', async (req, res) => {
   try {
+    if (!db) {
+      throw new Error('Database not initialized');
+    }
+
     const { id } = req.params;
-    const productRef = doc(db, 'products', id);
-    await deleteDoc(productRef);
+    await db.collection('products').doc(id).delete();
     
     res.json({
       success: true,
@@ -267,28 +280,35 @@ app.delete('/api/products/:id', async (req, res) => {
     });
   } catch (error) {
     console.error('Error deleting product:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // Search products
 app.get('/api/products/search', async (req, res) => {
   try {
-    const { query } = req.query;
+    if (!db) {
+      throw new Error('Database not initialized');
+    }
+
+    const { q: searchQuery } = req.query;
     
-    if (!query) {
+    if (!searchQuery) {
       return res.status(400).json({ error: 'Search query is required' });
     }
 
-    const productsRef = collection(db, 'products');
-    const q = query(
-      productsRef,
-      where('name', '>=', query.toLowerCase()),
-      where('name', '<=', query.toLowerCase() + '\uf8ff')
-    );
+    const productsRef = db.collection('products');
+    const queryRef = productsRef
+      .where('name', '>=', searchQuery.toLowerCase())
+      .where('name', '<=', searchQuery.toLowerCase() + '\uf8ff');
 
-    const querySnapshot = await getDocs(q);
-    const products = querySnapshot.docs.map(doc => ({
+    const snapshot = await queryRef.get();
+    
+    if (snapshot.empty) {
+      return res.json([]);
+    }
+
+    const products = snapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data()
     }));
@@ -296,10 +316,21 @@ app.get('/api/products/search', async (req, res) => {
     res.json(products);
   } catch (error) {
     console.error('Error searching products:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  res.status(500).json({ error: 'Internal server error' });
 });
+
+// Start server only if not in serverless environment
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(port, () => {
+    console.log(`Server is running on port ${port}`);
+  });
+}
+
+export default app;
