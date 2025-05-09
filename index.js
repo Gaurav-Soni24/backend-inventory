@@ -1,27 +1,30 @@
 import express from 'express';
-import { initializeApp, getApps, cert } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
-import { getAuth } from 'firebase-admin/auth';
+import { initializeApp } from 'firebase/app';
+import { getFirestore, collection, addDoc, getDocs, query, where, doc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
 
-// Initialize Firebase Admin
+// Your web app's Firebase configuration
+const firebaseConfig = {
+  apiKey: "AIzaSyAFyrCuGQSsaOBSIMLqM8PIZlKu9vBI3Bk",
+  authDomain: "inventory-management-sys-5223b.firebaseapp.com",
+  projectId: "inventory-management-sys-5223b",
+  storageBucket: "inventory-management-sys-5223b.firebasestorage.app",
+  messagingSenderId: "458873429371",
+  appId: "1:458873429371:web:1c66a20a8b0f30d47df1de"
+};
+
+// Initialize Firebase
+let firebaseApp;
 let db;
 let auth;
 
 try {
-  if (!getApps().length) {
-    initializeApp({
-      credential: cert({
-        projectId: "inventory-management-sys-5223b",
-        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n')
-      })
-    });
-  }
-  db = getFirestore();
-  auth = getAuth();
-  console.log('Firebase Admin initialized successfully');
+  firebaseApp = initializeApp(firebaseConfig);
+  db = getFirestore(firebaseApp);
+  auth = getAuth(firebaseApp);
+  console.log('Firebase initialized successfully');
 } catch (error) {
-  console.error('Error initializing Firebase Admin:', error);
+  console.error('Error initializing Firebase:', error);
 }
 
 const app = express();
@@ -43,109 +46,6 @@ app.get('/', (req, res) => {
   res.send('Hello World!');
 });
 
-// Test Firestore endpoint
-app.get('/test-firestore', async (req, res) => {
-  try {
-    const testCollection = db.collection('test');
-    const docRef = await testCollection.add({
-      message: 'Test successful',
-      timestamp: new Date()
-    });
-    res.json({ success: true, id: docRef.id });
-  } catch (error) {
-    console.error('Error testing Firestore:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Signup endpoint
-app.post('/api/auth/signup', async (req, res) => {
-  try {
-    const { email, password, name, role } = req.body;
-
-    // Validate input
-    if (!email || !password || !name || !role) {
-      return res.status(400).json({ error: 'All fields are required' });
-    }
-
-    // Create user in Firebase Auth
-    const userCredential = await auth.createUser({
-      email,
-      password,
-      displayName: name,
-      role
-    });
-    const user = userCredential.user;
-
-    // Store additional user data in Firestore
-    const userData = {
-      uid: user.uid,
-      email: user.email,
-      name,
-      role,
-      createdAt: new Date()
-    };
-
-    await db.collection('users').add(userData);
-
-    res.status(201).json({
-      success: true,
-      user: {
-        id: user.uid,
-        email: user.email,
-        name,
-        role
-      }
-    });
-  } catch (error) {
-    console.error('Error in signup:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Login endpoint
-app.post('/api/auth/login', async (req, res) => {
-  try {
-    const { email, password } = req.body;
-
-    // Validate input
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password are required' });
-    }
-
-    // Sign in user with Firebase Auth
-    const userCredential = await auth.signInWithEmailAndPassword(email, password);
-    const user = userCredential.user;
-
-    // Get user data from Firestore
-    const usersRef = db.collection('users');
-    const q = usersRef.where('uid', '==', user.uid);
-    const querySnapshot = await q.get();
-    
-    if (querySnapshot.empty) {
-      return res.status(404).json({ error: 'User data not found' });
-    }
-
-    const userData = querySnapshot.docs[0].data();
-
-    res.json({
-      success: true,
-      user: {
-        id: user.uid,
-        email: user.email,
-        name: userData.name,
-        role: userData.role
-      }
-    });
-  } catch (error) {
-    console.error('Error in login:', error);
-    if (error.code === 'auth/invalid-credential') {
-      return res.status(401).json({ error: 'Invalid email or password' });
-    }
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // Product Management Endpoints
 
 // Get all products
@@ -155,14 +55,14 @@ app.get('/api/products', async (req, res) => {
       throw new Error('Database not initialized');
     }
 
-    const productsRef = db.collection('products');
-    const snapshot = await productsRef.get();
+    const productsRef = collection(db, 'products');
+    const querySnapshot = await getDocs(productsRef);
     
-    if (snapshot.empty) {
+    if (querySnapshot.empty) {
       return res.json([]);
     }
 
-    const products = snapshot.docs.map(doc => ({
+    const products = querySnapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data()
     }));
@@ -203,7 +103,7 @@ app.post('/api/products', async (req, res) => {
       createdAt: new Date()
     };
 
-    const docRef = await db.collection('products').add(productData);
+    const docRef = await addDoc(collection(db, 'products'), productData);
     
     res.status(201).json({
       success: true,
@@ -248,8 +148,8 @@ app.put('/api/products/:id', async (req, res) => {
       updatedAt: new Date()
     };
 
-    const productRef = db.collection('products').doc(id);
-    await productRef.update(productData);
+    const productRef = doc(db, 'products', id);
+    await updateDoc(productRef, productData);
 
     res.json({
       success: true,
@@ -272,7 +172,8 @@ app.delete('/api/products/:id', async (req, res) => {
     }
 
     const { id } = req.params;
-    await db.collection('products').doc(id).delete();
+    const productRef = doc(db, 'products', id);
+    await deleteDoc(productRef);
     
     res.json({
       success: true,
@@ -297,18 +198,20 @@ app.get('/api/products/search', async (req, res) => {
       return res.status(400).json({ error: 'Search query is required' });
     }
 
-    const productsRef = db.collection('products');
-    const queryRef = productsRef
-      .where('name', '>=', searchQuery.toLowerCase())
-      .where('name', '<=', searchQuery.toLowerCase() + '\uf8ff');
+    const productsRef = collection(db, 'products');
+    const queryRef = query(
+      productsRef,
+      where('name', '>=', searchQuery.toLowerCase()),
+      where('name', '<=', searchQuery.toLowerCase() + '\uf8ff')
+    );
 
-    const snapshot = await queryRef.get();
+    const querySnapshot = await getDocs(queryRef);
     
-    if (snapshot.empty) {
+    if (querySnapshot.empty) {
       return res.json([]);
     }
 
-    const products = snapshot.docs.map(doc => ({
+    const products = querySnapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data()
     }));
