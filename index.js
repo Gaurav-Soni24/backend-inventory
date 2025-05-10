@@ -464,7 +464,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
     // Get low stock items count
     const lowStockQuery = query(
       productsRef,
-      where('stock', '<=', where('minStock', '>=', 0))
+      where('stock', '<=', 0)
     );
     const lowStockSnapshot = await getDocs(lowStockQuery);
     const lowStockItems = lowStockSnapshot.size;
