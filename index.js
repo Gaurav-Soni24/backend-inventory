@@ -461,38 +461,29 @@ app.get('/api/dashboard/stats', async (req, res) => {
     const productsSnapshot = await getDocs(productsRef);
     const totalProducts = productsSnapshot.size;
 
-    // Get low stock items count
-    const lowStockQuery = query(
-      productsRef,
-      where('stock', '<=', 0)
-    );
-    const lowStockSnapshot = await getDocs(lowStockQuery);
-    const lowStockItems = lowStockSnapshot.size;
-
-    // Get pending orders count (assuming you have an orders collection)
-    const ordersRef = collection(db, 'orders');
-    const pendingOrdersQuery = query(
-      ordersRef,
-      where('status', '==', 'pending')
-    );
-    const pendingOrdersSnapshot = await getDocs(pendingOrdersQuery);
-    const pendingOrders = pendingOrdersSnapshot.size;
-
-    // Calculate monthly sales (assuming you have a sales collection)
-    const now = new Date();
-    const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const salesRef = collection(db, 'sales');
-    const monthlySalesQuery = query(
-      salesRef,
-      where('date', '>=', firstDayOfMonth)
-    );
-    const monthlySalesSnapshot = await getDocs(monthlySalesQuery);
+    // Calculate total inventory value
+    let totalInventoryValue = 0;
+    let totalCategories = new Set();
+    let totalSuppliers = new Set();
     
-    let monthlySales = 0;
-    monthlySalesSnapshot.forEach(doc => {
-      const sale = doc.data();
-      monthlySales += sale.amount || 0;
+    productsSnapshot.forEach(doc => {
+      const product = doc.data();
+      totalInventoryValue += (product.stock * product.price);
+      totalCategories.add(product.category);
+      totalSuppliers.add(product.supplier);
     });
+
+    // Get recent stock movements (last 7 days)
+    const stockLogsRef = collection(db, 'stockLogs');
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    
+    const recentStockQuery = query(
+      stockLogsRef,
+      where('date', '>=', sevenDaysAgo.toISOString().split('T')[0])
+    );
+    const recentStockSnapshot = await getDocs(recentStockQuery);
+    const recentStockMovements = recentStockSnapshot.size;
 
     // Format the response
     const stats = [
@@ -503,22 +494,28 @@ app.get('/api/dashboard/stats', async (req, res) => {
         color: '#2196F3'
       },
       {
-        icon: 'warning',
-        title: 'Low Stock Items',
-        value: lowStockItems.toString(),
-        color: '#f44336'
-      },
-      {
-        icon: 'local-shipping',
-        title: 'Pending Orders',
-        value: pendingOrders.toString(),
+        icon: 'attach_money',
+        title: 'Total Inventory Value',
+        value: `$${(totalInventoryValue / 1000).toFixed(1)}k`,
         color: '#4CAF50'
       },
       {
-        icon: 'trending-up',
-        title: 'Monthly Sales',
-        value: `$${(monthlySales / 1000).toFixed(1)}k`,
+        icon: 'category',
+        title: 'Product Categories',
+        value: totalCategories.size.toString(),
         color: '#FF9800'
+      },
+      {
+        icon: 'local_shipping',
+        title: 'Active Suppliers',
+        value: totalSuppliers.size.toString(),
+        color: '#9C27B0'
+      },
+      {
+        icon: 'sync',
+        title: 'Recent Stock Movements',
+        value: recentStockMovements.toString(),
+        color: '#E91E63'
       }
     ];
 
