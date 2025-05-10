@@ -447,6 +447,145 @@ app.get('/api/stock-logs/search', async (req, res) => {
   }
 });
 
+// Dashboard Endpoints
+
+// Get dashboard statistics
+app.get('/api/dashboard/stats', async (req, res) => {
+  try {
+    if (!db) {
+      throw new Error('Database not initialized');
+    }
+
+    // Get total products count
+    const productsRef = collection(db, 'products');
+    const productsSnapshot = await getDocs(productsRef);
+    const totalProducts = productsSnapshot.size;
+
+    // Get low stock items count
+    const lowStockQuery = query(
+      productsRef,
+      where('stock', '<=', where('minStock', '>=', 0))
+    );
+    const lowStockSnapshot = await getDocs(lowStockQuery);
+    const lowStockItems = lowStockSnapshot.size;
+
+    // Get pending orders count (assuming you have an orders collection)
+    const ordersRef = collection(db, 'orders');
+    const pendingOrdersQuery = query(
+      ordersRef,
+      where('status', '==', 'pending')
+    );
+    const pendingOrdersSnapshot = await getDocs(pendingOrdersQuery);
+    const pendingOrders = pendingOrdersSnapshot.size;
+
+    // Calculate monthly sales (assuming you have a sales collection)
+    const now = new Date();
+    const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const salesRef = collection(db, 'sales');
+    const monthlySalesQuery = query(
+      salesRef,
+      where('date', '>=', firstDayOfMonth)
+    );
+    const monthlySalesSnapshot = await getDocs(monthlySalesQuery);
+    
+    let monthlySales = 0;
+    monthlySalesSnapshot.forEach(doc => {
+      const sale = doc.data();
+      monthlySales += sale.amount || 0;
+    });
+
+    // Format the response
+    const stats = [
+      {
+        icon: 'inventory',
+        title: 'Total Products',
+        value: totalProducts.toString(),
+        color: '#2196F3'
+      },
+      {
+        icon: 'warning',
+        title: 'Low Stock Items',
+        value: lowStockItems.toString(),
+        color: '#f44336'
+      },
+      {
+        icon: 'local-shipping',
+        title: 'Pending Orders',
+        value: pendingOrders.toString(),
+        color: '#4CAF50'
+      },
+      {
+        icon: 'trending-up',
+        title: 'Monthly Sales',
+        value: `$${(monthlySales / 1000).toFixed(1)}k`,
+        color: '#FF9800'
+      }
+    ];
+
+    res.json(stats);
+  } catch (error) {
+    console.error('Error fetching dashboard stats:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get navigation menu items
+app.get('/api/dashboard/navigation', async (req, res) => {
+  try {
+    // This could be dynamic based on user role
+    const navigationItems = [
+      {
+        icon: 'inventory',
+        title: 'Products',
+        route: 'Products',
+        color: '#007AFF'
+      },
+      {
+        icon: 'local-shipping',
+        title: 'Stock Management',
+        route: 'Stock',
+        color: '#007AFF'
+      }
+    ];
+
+    res.json(navigationItems);
+  } catch (error) {
+    console.error('Error fetching navigation items:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get user profile
+app.get('/api/dashboard/profile', async (req, res) => {
+  try {
+    if (!db) {
+      throw new Error('Database not initialized');
+    }
+
+    // Get user ID from auth token (you'll need to implement proper auth middleware)
+    const userId = 'current-user-id'; // This should come from your auth system
+
+    const usersRef = collection(db, 'users');
+    const q = query(usersRef, where('uid', '==', userId));
+    const querySnapshot = await getDocs(q);
+
+    if (querySnapshot.empty) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const userData = querySnapshot.docs[0].data();
+    
+    res.json({
+      name: userData.name,
+      role: userData.role,
+      email: userData.email
+    });
+  } catch (error) {
+    console.error('Error fetching user profile:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
