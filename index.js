@@ -43,8 +43,12 @@ app.use((req, res, next) => {
 
 // Test endpoint
 app.get('/', (req, res) => {
-  res.send('Hello World!');
+  res.send('Multi-App Backend Server - Inventory Management & Neural Note');
 });
+
+// =============================================================================
+// INVENTORY MANAGEMENT SYSTEM APIs (Existing)
+// =============================================================================
 
 // Product Management Endpoints
 
@@ -230,7 +234,7 @@ app.get('/api/products/search', async (req, res) => {
   }
 });
 
-// Signup endpoint
+// Inventory Management Auth Endpoints
 app.post('/api/auth/signup', async (req, res) => {
   try {
     const { email, password, name, role } = req.body;
@@ -250,6 +254,7 @@ app.post('/api/auth/signup', async (req, res) => {
       email: user.email,
       name,
       role,
+      app: 'inventory',
       createdAt: new Date()
     };
 
@@ -261,11 +266,12 @@ app.post('/api/auth/signup', async (req, res) => {
         id: user.uid,
         email: user.email,
         name,
-        role
+        role,
+        app: 'inventory'
       }
     });
   } catch (error) {
-    console.error('Error in signup:', error);
+    console.error('Error in inventory signup:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -286,11 +292,11 @@ app.post('/api/auth/login', async (req, res) => {
 
     // Get user data from Firestore
     const usersRef = collection(db, 'users');
-    const q = query(usersRef, where('uid', '==', user.uid));
+    const q = query(usersRef, where('uid', '==', user.uid), where('app', '==', 'inventory'));
     const querySnapshot = await getDocs(q);
     
     if (querySnapshot.empty) {
-      return res.status(404).json({ error: 'User data not found' });
+      return res.status(404).json({ error: 'User data not found for inventory app' });
     }
 
     const userData = querySnapshot.docs[0].data();
@@ -301,11 +307,12 @@ app.post('/api/auth/login', async (req, res) => {
         id: user.uid,
         email: user.email,
         name: userData.name,
-        role: userData.role
+        role: userData.role,
+        app: 'inventory'
       }
     });
   } catch (error) {
-    console.error('Error in login:', error);
+    console.error('Error in inventory login:', error);
     if (error.code === 'auth/invalid-credential') {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
@@ -583,17 +590,735 @@ app.get('/api/dashboard/profile', async (req, res) => {
   }
 });
 
+// =============================================================================
+// NEURAL NOTE APP APIs (New)
+// =============================================================================
+
+// Neural Note Signup endpoint
+app.post('/api/neural-note/auth/signup', async (req, res) => {
+  try {
+    const { email, password, firstName, lastName } = req.body;
+
+    // Validate input
+    if (!email || !password || !firstName || !lastName) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'All fields are required (email, password, firstName, lastName)' 
+      });
+    }
+
+    // Validate password strength
+    if (password.length < 6) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Password must be at least 6 characters long' 
+      });
+    }
+
+    // Check if user already exists in Neural Note collection
+    const neuralNoteUsersRef = collection(db, 'neuralNoteUsers');
+    const existingUserQuery = query(neuralNoteUsersRef, where('email', '==', email.toLowerCase()));
+    const existingUserSnapshot = await getDocs(existingUserQuery);
+
+    if (!existingUserSnapshot.empty) {
+      return res.status(409).json({ 
+        success: false,
+        error: 'An account with this email already exists' 
+      });
+    }
+
+    // Create user in Firebase Auth
+    const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+    const user = userCredential.user;
+
+    // Store Neural Note specific user data in Firestore
+    const userData = {
+      uid: user.uid,
+      email: user.email.toLowerCase(),
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      fullName: `${firstName.trim()} ${lastName.trim()}`,
+      app: 'neural-note',
+      isActive: true,
+      preferences: {
+        theme: 'light',
+        notifications: true,
+        autoSave: true
+      },
+      stats: {
+        totalNotes: 0,
+        totalCategories: 0,
+        lastLogin: new Date()
+      },
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const docRef = await addDoc(neuralNoteUsersRef, userData);
+
+    res.status(201).json({
+      success: true,
+      message: 'Account created successfully',
+      user: {
+        id: user.uid,
+        docId: docRef.id,
+        email: user.email,
+        firstName: userData.firstName,
+        lastName: userData.lastName,
+        fullName: userData.fullName,
+        app: 'neural-note',
+        isActive: userData.isActive,
+        preferences: userData.preferences,
+        stats: userData.stats
+      }
+    });
+  } catch (error) {
+    console.error('Error in Neural Note signup:', error);
+    
+    // Handle specific Firebase Auth errors
+    let errorMessage = 'Failed to create account';
+    if (error.code === 'auth/email-already-in-use') {
+      errorMessage = 'An account with this email already exists';
+    } else if (error.code === 'auth/invalid-email') {
+      errorMessage = 'Please enter a valid email address';
+    } else if (error.code === 'auth/weak-password') {
+      errorMessage = 'Password is too weak. Please choose a stronger password';
+    }
+
+    res.status(500).json({ 
+      success: false,
+      error: errorMessage,
+      details: error.message 
+    });
+  }
+});
+
+// Neural Note Login endpoint
+app.post('/api/neural-note/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    // Validate input
+    if (!email || !password) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Email and password are required' 
+      });
+    }
+
+    // Sign in user with Firebase Auth
+    const userCredential = await signInWithEmailAndPassword(auth, email, password);
+    const user = userCredential.user;
+
+    // Get user data from Neural Note specific collection
+    const neuralNoteUsersRef = collection(db, 'neuralNoteUsers');
+    const q = query(neuralNoteUsersRef, where('uid', '==', user.uid));
+    const querySnapshot = await getDocs(q);
+    
+    if (querySnapshot.empty) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'Neural Note account not found. Please sign up first.' 
+      });
+    }
+
+    const userDoc = querySnapshot.docs[0];
+    const userData = userDoc.data();
+
+    // Check if account is active
+    if (!userData.isActive) {
+      return res.status(403).json({ 
+        success: false,
+        error: 'Your account has been deactivated. Please contact support.' 
+      });
+    }
+
+    // Update last login time
+    await updateDoc(userDoc.ref, {
+      'stats.lastLogin': new Date(),
+      updatedAt: new Date()
+    });
+
+    res.json({
+      success: true,
+      message: 'Login successful',
+      user: {
+        id: user.uid,
+        docId: userDoc.id,
+        email: user.email,
+        firstName: userData.firstName,
+        lastName: userData.lastName,
+        fullName: userData.fullName,
+        app: 'neural-note',
+        isActive: userData.isActive,
+        preferences: userData.preferences,
+        stats: {
+          ...userData.stats,
+          lastLogin: new Date()
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Error in Neural Note login:', error);
+    
+    // Handle specific Firebase Auth errors
+    let errorMessage = 'Login failed';
+    if (error.code === 'auth/invalid-credential' || error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password') {
+      errorMessage = 'Invalid email or password';
+    } else if (error.code === 'auth/user-disabled') {
+      errorMessage = 'This account has been disabled';
+    } else if (error.code === 'auth/too-many-requests') {
+      errorMessage = 'Too many failed attempts. Please try again later';
+    }
+
+    res.status(401).json({ 
+      success: false,
+      error: errorMessage 
+    });
+  }
+});
+
+// Neural Note - Get user profile
+app.get('/api/neural-note/user/profile/:userId', async (req, res) => {
+  try {
+    if (!db) {
+      throw new Error('Database not initialized');
+    }
+
+    const { userId } = req.params;
+
+    if (!userId) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'User ID is required' 
+      });
+    }
+
+    const neuralNoteUsersRef = collection(db, 'neuralNoteUsers');
+    const q = query(neuralNoteUsersRef, where('uid', '==', userId));
+    const querySnapshot = await getDocs(q);
+
+    if (querySnapshot.empty) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'User profile not found' 
+      });
+    }
+
+    const userDoc = querySnapshot.docs[0];
+    const userData = userDoc.data();
+
+    res.json({
+      success: true,
+      user: {
+        id: userData.uid,
+        docId: userDoc.id,
+        email: userData.email,
+        firstName: userData.firstName,
+        lastName: userData.lastName,
+        fullName: userData.fullName,
+        isActive: userData.isActive,
+        preferences: userData.preferences,
+        stats: userData.stats,
+        createdAt: userData.createdAt,
+        updatedAt: userData.updatedAt
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching Neural Note user profile:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch user profile' 
+    });
+  }
+});
+
+// Neural Note - Update user profile
+app.put('/api/neural-note/user/profile/:userId', async (req, res) => {
+  try {
+    if (!db) {
+      throw new Error('Database not initialized');
+    }
+
+    const { userId } = req.params;
+    const { firstName, lastName, preferences } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'User ID is required' 
+      });
+    }
+
+    // Find user document
+    const neuralNoteUsersRef = collection(db, 'neuralNoteUsers');
+    const q = query(neuralNoteUsersRef, where('uid', '==', userId));
+    const querySnapshot = await getDocs(q);
+
+    if (querySnapshot.empty) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+    }
+
+    const userDoc = querySnapshot.docs[0];
+    const currentData = userDoc.data();
+
+    // Prepare update data
+    const updateData = {
+      updatedAt: new Date()
+    };
+
+    if (firstName && firstName.trim()) {
+      updateData.firstName = firstName.trim();
+    }
+
+    if (lastName && lastName.trim()) {
+      updateData.lastName = lastName.trim();
+    }
+
+    if (updateData.firstName || updateData.lastName) {
+      updateData.fullName = `${updateData.firstName || currentData.firstName} ${updateData.lastName || currentData.lastName}`;
+    }
+
+    if (preferences && typeof preferences === 'object') {
+      updateData.preferences = {
+        ...currentData.preferences,
+        ...preferences
+      };
+    }
+
+    // Update the document
+    await updateDoc(userDoc.ref, updateData);
+
+    // Get updated data
+    const updatedDoc = await getDoc(userDoc.ref);
+    const updatedData = updatedDoc.data();
+
+    res.json({
+      success: true,
+      message: 'Profile updated successfully',
+      user: {
+        id: updatedData.uid,
+        docId: updatedDoc.id,
+        email: updatedData.email,
+        firstName: updatedData.firstName,
+        lastName: updatedData.lastName,
+        fullName: updatedData.fullName,
+        isActive: updatedData.isActive,
+        preferences: updatedData.preferences,
+        stats: updatedData.stats,
+        createdAt: updatedData.createdAt,
+        updatedAt: updatedData.updatedAt
+      }
+    });
+  } catch (error) {
+    console.error('Error updating Neural Note user profile:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to update profile' 
+    });
+  }
+});
+
+// Neural Note - Password reset request
+app.post('/api/neural-note/auth/reset-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Email is required' 
+      });
+    }
+
+    // Check if user exists in Neural Note collection
+    const neuralNoteUsersRef = collection(db, 'neuralNoteUsers');
+    const q = query(neuralNoteUsersRef, where('email', '==', email.toLowerCase()));
+    const querySnapshot = await getDocs(q);
+
+    if (querySnapshot.empty) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'No Neural Note account found with this email address' 
+      });
+    }
+
+    // Note: You would typically use Firebase Auth's sendPasswordResetEmail here
+    // For now, we'll just return a success message
+    res.json({
+      success: true,
+      message: 'If an account with this email exists, a password reset link has been sent.'
+    });
+  } catch (error) {
+    console.error('Error in Neural Note password reset:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to process password reset request' 
+    });
+  }
+});
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
   res.status(500).json({ error: 'Internal server error' });
 });
 
+// Neural Note - Check email availability
+app.get('/api/neural-note/auth/check-email/:email', async (req, res) => {
+  try {
+    const { email } = req.params;
+
+    if (!email) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Email is required' 
+      });
+    }
+
+    // Check if email exists in Neural Note collection
+    const neuralNoteUsersRef = collection(db, 'neuralNoteUsers');
+    const q = query(neuralNoteUsersRef, where('email', '==', email.toLowerCase()));
+    const querySnapshot = await getDocs(q);
+
+    res.json({
+      success: true,
+      available: querySnapshot.empty,
+      message: querySnapshot.empty ? 'Email is available' : 'Email is already registered'
+    });
+  } catch (error) {
+    console.error('Error checking email availability:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to check email availability' 
+    });
+  }
+});
+
+// Neural Note - Delete user account
+app.delete('/api/neural-note/user/:userId', async (req, res) => {
+  try {
+    if (!db) {
+      throw new Error('Database not initialized');
+    }
+
+    const { userId } = req.params;
+
+    if (!userId) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'User ID is required' 
+      });
+    }
+
+    // Find and delete user document
+    const neuralNoteUsersRef = collection(db, 'neuralNoteUsers');
+    const q = query(neuralNoteUsersRef, where('uid', '==', userId));
+    const querySnapshot = await getDocs(q);
+
+    if (querySnapshot.empty) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+    }
+
+    const userDoc = querySnapshot.docs[0];
+    
+    // Soft delete - mark as inactive instead of actually deleting
+    await updateDoc(userDoc.ref, {
+      isActive: false,
+      deletedAt: new Date(),
+      updatedAt: new Date()
+    });
+
+    res.json({
+      success: true,
+      message: 'Account deactivated successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting Neural Note user:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to delete user account' 
+    });
+  }
+});
+
+// Neural Note - Get user statistics
+app.get('/api/neural-note/user/stats/:userId', async (req, res) => {
+  try {
+    if (!db) {
+      throw new Error('Database not initialized');
+    }
+
+    const { userId } = req.params;
+
+    if (!userId) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'User ID is required' 
+      });
+    }
+
+    // Get user data
+    const neuralNoteUsersRef = collection(db, 'neuralNoteUsers');
+    const userQuery = query(neuralNoteUsersRef, where('uid', '==', userId));
+    const userSnapshot = await getDocs(userQuery);
+
+    if (userSnapshot.empty) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+    }
+
+    const userData = userSnapshot.docs[0].data();
+
+    // Here you can add logic to calculate real-time stats from notes collection
+    // For now, we'll return the stored stats with some additional computed data
+    const stats = {
+      ...userData.stats,
+      accountAge: Math.floor((new Date() - userData.createdAt.toDate()) / (1000 * 60 * 60 * 24)), // days
+      isActive: userData.isActive,
+      lastLoginFormatted: userData.stats.lastLogin ? new Date(userData.stats.lastLogin.toDate()).toLocaleDateString() : 'Never'
+    };
+
+    res.json({
+      success: true,
+      stats
+    });
+  } catch (error) {
+    console.error('Error fetching Neural Note user stats:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch user statistics' 
+    });
+  }
+});
+
+// Neural Note - Update user statistics (for internal use)
+app.put('/api/neural-note/user/stats/:userId', async (req, res) => {
+  try {
+    if (!db) {
+      throw new Error('Database not initialized');
+    }
+
+    const { userId } = req.params;
+    const { totalNotes, totalCategories } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'User ID is required' 
+      });
+    }
+
+    // Find user document
+    const neuralNoteUsersRef = collection(db, 'neuralNoteUsers');
+    const q = query(neuralNoteUsersRef, where('uid', '==', userId));
+    const querySnapshot = await getDocs(q);
+
+    if (querySnapshot.empty) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+    }
+
+    const userDoc = querySnapshot.docs[0];
+    const currentData = userDoc.data();
+
+    // Update stats
+    const updateData = {
+      'stats.totalNotes': totalNotes !== undefined ? Number(totalNotes) : currentData.stats.totalNotes,
+      'stats.totalCategories': totalCategories !== undefined ? Number(totalCategories) : currentData.stats.totalCategories,
+      updatedAt: new Date()
+    };
+
+    await updateDoc(userDoc.ref, updateData);
+
+    res.json({
+      success: true,
+      message: 'User statistics updated successfully',
+      stats: {
+        totalNotes: updateData['stats.totalNotes'],
+        totalCategories: updateData['stats.totalCategories'],
+        lastLogin: currentData.stats.lastLogin
+      }
+    });
+  } catch (error) {
+    console.error('Error updating Neural Note user stats:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to update user statistics' 
+    });
+  }
+});
+
+// Neural Note - Get all users (admin endpoint)
+app.get('/api/neural-note/admin/users', async (req, res) => {
+  try {
+    if (!db) {
+      throw new Error('Database not initialized');
+    }
+
+    const { page = 1, limit = 10, active = 'all' } = req.query;
+    
+    const neuralNoteUsersRef = collection(db, 'neuralNoteUsers');
+    let q = neuralNoteUsersRef;
+
+    // Filter by active status
+    if (active === 'true') {
+      q = query(neuralNoteUsersRef, where('isActive', '==', true));
+    } else if (active === 'false') {
+      q = query(neuralNoteUsersRef, where('isActive', '==', false));
+    }
+
+    const querySnapshot = await getDocs(q);
+    
+    if (querySnapshot.empty) {
+      return res.json({
+        success: true,
+        users: [],
+        pagination: {
+          currentPage: 1,
+          totalPages: 0,
+          totalUsers: 0,
+          hasNext: false,
+          hasPrev: false
+        }
+      });
+    }
+
+    const allUsers = querySnapshot.docs.map(doc => ({
+      docId: doc.id,
+      ...doc.data(),
+      // Don't expose sensitive data
+      uid: undefined
+    }));
+
+    // Simple pagination
+    const startIndex = (Number(page) - 1) * Number(limit);
+    const endIndex = startIndex + Number(limit);
+    const paginatedUsers = allUsers.slice(startIndex, endIndex);
+
+    res.json({
+      success: true,
+      users: paginatedUsers,
+      pagination: {
+        currentPage: Number(page),
+        totalPages: Math.ceil(allUsers.length / Number(limit)),
+        totalUsers: allUsers.length,
+        hasNext: endIndex < allUsers.length,
+        hasPrev: startIndex > 0
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching Neural Note users:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch users' 
+    });
+  }
+});
+
+// Health check endpoint for both apps
+app.get('/api/health', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Multi-App Backend Server is running',
+    timestamp: new Date().toISOString(),
+    apps: {
+      'inventory-management': 'active',
+      'neural-note': 'active'
+    },
+    firebase: {
+      status: db ? 'connected' : 'disconnected',
+      auth: auth ? 'initialized' : 'not initialized'
+    }
+  });
+});
+
+// API documentation endpoint
+app.get('/api/docs', (req, res) => {
+  res.json({
+    success: true,
+    documentation: {
+      'inventory-management': {
+        auth: {
+          signup: 'POST /api/auth/signup',
+          login: 'POST /api/auth/login'
+        },
+        products: {
+          getAll: 'GET /api/products',
+          create: 'POST /api/products',
+          update: 'PUT /api/products/:id',
+          delete: 'DELETE /api/products/:id',
+          search: 'GET /api/products/search?q={query}'
+        },
+        stock: {
+          getLogs: 'GET /api/stock-logs',
+          createLog: 'POST /api/stock-logs',
+          searchLogs: 'GET /api/stock-logs/search'
+        },
+        dashboard: {
+          stats: 'GET /api/dashboard/stats',
+          navigation: 'GET /api/dashboard/navigation',
+          profile: 'GET /api/dashboard/profile'
+        }
+      },
+      'neural-note': {
+        auth: {
+          signup: 'POST /api/neural-note/auth/signup',
+          login: 'POST /api/neural-note/auth/login',
+          resetPassword: 'POST /api/neural-note/auth/reset-password',
+          checkEmail: 'GET /api/neural-note/auth/check-email/:email'
+        },
+        user: {
+          getProfile: 'GET /api/neural-note/user/profile/:userId',
+          updateProfile: 'PUT /api/neural-note/user/profile/:userId',
+          deleteAccount: 'DELETE /api/neural-note/user/:userId',
+          getStats: 'GET /api/neural-note/user/stats/:userId',
+          updateStats: 'PUT /api/neural-note/user/stats/:userId'
+        },
+        admin: {
+          getAllUsers: 'GET /api/neural-note/admin/users'
+        }
+      },
+      system: {
+        health: 'GET /api/health',
+        docs: 'GET /api/docs'
+      }
+    }
+  });
+});
+
 // Start server only if not in serverless environment
 if (process.env.NODE_ENV !== 'production') {
   app.listen(port, () => {
-    console.log(`Server is running on port ${port}`);
+    console.log(`Multi-App Backend Server is running on port ${port}`);
+    console.log('');
+    console.log('📋 Available APIs:');
+    console.log('');
+    console.log('🏪 Inventory Management System:');
+    console.log('   Auth: /api/auth/signup, /api/auth/login');
+    console.log('   Products: /api/products, /api/products/search');
+    console.log('   Stock: /api/stock-logs');
+    console.log('   Dashboard: /api/dashboard/*');
+    console.log('');
+    console.log('🧠 Neural Note App:');
+    console.log('   Auth: /api/neural-note/auth/*');
+    console.log('   User: /api/neural-note/user/*');
+    console.log('   Admin: /api/neural-note/admin/*');
+    console.log('');
+    console.log('🔧 System:');
+    console.log('   Health Check: /api/health');
+    console.log('   API Documentation: /api/docs');
+    console.log('');
+    console.log('🌐 Server URL: http://localhost:' + port);
   });
 }
-
-export default app;
