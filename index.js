@@ -1322,3 +1322,6 @@ if (process.env.NODE_ENV !== 'production') {
     console.log('🌐 Server URL: http://localhost:' + port);
   });
 }
+
+// Export the app for Vercel
+export default app;
